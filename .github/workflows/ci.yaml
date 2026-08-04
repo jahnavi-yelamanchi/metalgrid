@@ -5,9 +5,26 @@ on:
     branches: [main]
   pull_request:
 
+env:
+  REGISTRY: ghcr.io
+  IMAGE_BASE: ghcr.io/${{ github.repository }}
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: metalgrid
+          POSTGRES_PASSWORD: metalgrid
+          POSTGRES_DB: metalgrid
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U metalgrid"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -15,3 +32,73 @@ jobs:
           go-version-file: go.mod
       - run: go vet ./...
       - run: go test ./...
+        env:
+          DATABASE_URL: postgres://metalgrid:metalgrid@localhost:5432/metalgrid
+
+  # Builds, scans, SBOMs, and keylessly signs each component's image. Only on
+  # push to main — PRs get test coverage only, nothing is published for an
+  # unreviewed change.
+  build-and-push:
+    if: github.event_name == 'push'
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # required for cosign's keyless OIDC signing
+    strategy:
+      matrix:
+        component: [apiserver, operator, scheduler, devplugin, mockinference]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          build-args: CMD=${{ matrix.component }}
+          push: true
+          # Pinned tags only (sha + branch) — no :latest, matching our own
+          # Kyverno disallow-latest-tag policy (deploy/kyverno).
+          tags: |
+            ${{ env.IMAGE_BASE }}/${{ matrix.component }}:${{ github.sha }}
+            ${{ env.IMAGE_BASE }}/${{ matrix.component }}:main
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@0.29.0
+        with:
+          image-ref: ${{ env.IMAGE_BASE }}/${{ matrix.component }}:${{ github.sha }}
+          format: table
+          # Report only, don't fail the build on base-image CVEs outside our
+          # control — this is a scan-and-see-it step, not a release gate.
+          exit-code: "0"
+          severity: HIGH,CRITICAL
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.IMAGE_BASE }}/${{ matrix.component }}:${{ github.sha }}
+          format: spdx-json
+          output-file: sbom-${{ matrix.component }}.spdx.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ matrix.component }}
+          path: sbom-${{ matrix.component }}.spdx.json
+
+      - uses: sigstore/cosign-installer@v3
+
+      - name: Sign image (keyless)
+        run: cosign sign --yes "${IMAGE_BASE}/${{ matrix.component }}@${{ steps.build.outputs.digest }}"
+        env:
+          IMAGE_BASE: ${{ env.IMAGE_BASE }}
