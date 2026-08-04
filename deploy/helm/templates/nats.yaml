@@ -15,7 +15,15 @@ spec:
       containers:
         - name: nats
           image: {{ .Values.nats.image }}
-          args: ["-js", "-m", "8222"]
+          # -sd points JetStream at the mounted PVC. Without it, "-js" alone
+          # still enables JetStream but defaults its store dir to /tmp —
+          # ephemeral container filesystem — so every pod restart silently
+          # loses all streams/consumers/messages despite the PVC existing
+          # and being mounted. Found via the kill-nats chaos drill
+          # (hack/chaos/kill-nats.sh): apiserver's connection recovered fine
+          # after restart but publishes failed with "no response from
+          # stream" because the stream itself no longer existed.
+          args: ["-js", "-sd", "/data", "-m", "8222"]
           ports:
             - { containerPort: 4222, name: client }
             - { containerPort: 8222, name: monitor }
