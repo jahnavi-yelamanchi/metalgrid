@@ -67,6 +67,10 @@ jobs:
           context: .
           build-args: CMD=${{ matrix.component }}
           push: true
+          # amd64 (GH runners) + arm64 (Apple Silicon dev machines / kind on
+          # them) — a CI-built image should actually be deployable locally,
+          # not just on the runner's own architecture.
+          platforms: linux/amd64,linux/arm64
           # Pinned tags only (sha + branch) — no :latest, matching our own
           # Kyverno disallow-latest-tag policy (deploy/kyverno).
           tags: |
