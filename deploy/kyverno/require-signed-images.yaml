@@ -1,0 +1,32 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-signed-images
+spec:
+  validationFailureAction: Enforce
+  background: false
+  webhookTimeoutSeconds: 30
+  rules:
+    - name: verify-cosign-keyless-signature
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+      # Only images built by this project's own CI are gated (via
+      # verifyImages[].imageReferences below) — this doesn't touch
+      # busybox/postgres/nats/cert-manager/etc, which have no signature to
+      # check against our issuer.
+      verifyImages:
+        - imageReferences:
+            - "ghcr.io/jahnavi-yelamanchi/metalgrid/*"
+          attestors:
+            - entries:
+                - keyless:
+                    # Matches cosign's keyless signing via GitHub Actions'
+                    # OIDC token (.github/workflows/ci.yaml) — no key
+                    # management, the identity IS "this exact workflow, on
+                    # this exact repo."
+                    subject: "https://github.com/jahnavi-yelamanchi/metalgrid/.github/workflows/ci.yaml@refs/heads/main"
+                    issuer: "https://token.actions.githubusercontent.com"
+                    rekor:
+                      url: https://rekor.sigstore.dev

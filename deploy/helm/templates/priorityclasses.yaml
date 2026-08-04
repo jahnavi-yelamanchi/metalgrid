@@ -1,0 +1,23 @@
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: metalgrid-high
+value: 1000000
+globalDefault: false
+description: High priority AcceleratorJob pods; may preempt metalgrid-normal/low.
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: metalgrid-normal
+value: 100000
+globalDefault: false
+description: Default priority for AcceleratorJob pods.
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: metalgrid-low
+value: 10000
+globalDefault: false
+description: Low priority AcceleratorJob pods; preemptible by normal/high.

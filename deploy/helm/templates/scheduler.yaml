@@ -1,0 +1,71 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: metalgrid-scheduler
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: metalgrid-scheduler
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: metalgrid-scheduler
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: metalgrid-scheduler
+subjects:
+  - kind: ServiceAccount
+    name: metalgrid-scheduler
+    namespace: kube-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: metalgrid-scheduler
+  namespace: kube-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: metalgrid-scheduler
+  template:
+    metadata:
+      labels:
+        app: metalgrid-scheduler
+    spec:
+      serviceAccountName: metalgrid-scheduler
+      containers:
+        - name: scheduler
+          image: {{ .Values.images.scheduler }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          ports:
+            - containerPort: 8888
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: metalgrid-scheduler
+  namespace: kube-system
+spec:
+  # Fixed ClusterIP: kube-scheduler's static pod runs with hostNetwork: true,
+  # so it uses the node's DNS resolver, not cluster DNS, and can't resolve
+  # this Service's DNS name. kube-proxy's ClusterIP routing works from any
+  # node regardless of DNS, so the scheduler config points at this IP
+  # directly. kind-specific — must stay in sync with
+  # hack/kube-scheduler-extender-config.yaml. On a cluster whose scheduler
+  # config you don't control this way, drop clusterIP and wire the extender
+  # through your own KubeSchedulerConfiguration instead.
+  clusterIP: 10.96.0.88
+  selector:
+    app: metalgrid-scheduler
+  ports:
+    - port: 8888
+      targetPort: 8888

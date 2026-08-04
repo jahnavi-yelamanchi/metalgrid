@@ -1,0 +1,51 @@
+namespace: metalgrid-system
+
+images:
+  apiserver: metalgrid/apiserver:dev
+  operator: metalgrid/operator:dev
+  scheduler: metalgrid/scheduler:dev
+  devplugin: metalgrid/devplugin:dev
+  mockinference: metalgrid/mockinference:dev
+  pullPolicy: IfNotPresent
+
+replicas:
+  apiserver: 2
+  operator: 2
+
+devplugin:
+  numDevices: 4
+
+auth:
+  # Empty disables JWT auth entirely (local dev). Set via --set or a
+  # values override backed by a real secret for anything beyond kind.
+  jwtSecret: ""
+  rateLimitRPS: "5"
+  rateLimitBurst: "10"
+
+postgres:
+  image: postgres:17-alpine
+  storage: 1Gi
+  database: metalgrid
+  user: metalgrid
+  password: metalgrid # ponytail: plaintext for local/kind only. Upgrade path: External Secrets/Sealed Secrets before any real deployment.
+
+nats:
+  image: nats:2.10-alpine
+
+tracing:
+  # Empty disables tracing (noop tracer). Point at an OTLP/gRPC collector,
+  # e.g. "jaeger-collector.observability.svc:4317".
+  otlpEndpoint: ""
+
+webhook:
+  enabled: true
+
+monitoring:
+  # Requires kube-prometheus-stack's CRDs (PrometheusRule) already installed.
+  # Off by default so a bare `helm install` doesn't fail on a missing CRD.
+  enabled: false
+
+resources:
+  small:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 500m, memory: 256Mi }

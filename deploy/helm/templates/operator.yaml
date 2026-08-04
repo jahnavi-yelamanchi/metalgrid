@@ -2,9 +2,9 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: metalgrid-operator
-  namespace: metalgrid-system
+  namespace: {{ .Release.Namespace }}
 spec:
-  replicas: 2
+  replicas: {{ .Values.replicas.operator }}
   selector:
     matchLabels:
       app: metalgrid-operator
@@ -16,19 +16,23 @@ spec:
       serviceAccountName: metalgrid-operator
       containers:
         - name: operator
-          image: metalgrid/operator:dev
-          imagePullPolicy: IfNotPresent
+          image: {{ .Values.images.operator }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
           args:
             - --leader-elect=true
-            - --leader-election-namespace=metalgrid-system
+            - --leader-election-namespace={{ .Release.Namespace }}
+            {{- if .Values.webhook.enabled }}
             - --enable-webhook=true
+            {{- end }}
           ports:
             - name: metrics
               containerPort: 8080
             - name: health
               containerPort: 8081
+            {{- if .Values.webhook.enabled }}
             - name: webhook
               containerPort: 9443
+            {{- end }}
           envFrom:
             - secretRef:
                 name: metalgrid-operator-secrets
@@ -46,9 +50,8 @@ spec:
             httpGet: { path: /readyz, port: health }
             periodSeconds: 5
             failureThreshold: 2
-          resources:
-            requests: { cpu: 50m, memory: 64Mi }
-            limits: { cpu: 500m, memory: 256Mi }
+          resources: {{ toYaml .Values.resources.small | nindent 12 }}
+          {{- if .Values.webhook.enabled }}
           volumeMounts:
             - name: webhook-certs
               mountPath: /tmp/k8s-webhook-server/serving-certs
@@ -57,12 +60,13 @@ spec:
         - name: webhook-certs
           secret:
             secretName: metalgrid-webhook-certs
+          {{- end }}
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: metalgrid-operator
-  namespace: metalgrid-system
+  namespace: {{ .Release.Namespace }}
 spec:
   minAvailable: 1
   selector:
@@ -73,7 +77,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: metalgrid-operator
-  namespace: metalgrid-system
+  namespace: {{ .Release.Namespace }}
 spec:
   podSelector:
     matchLabels:
@@ -89,5 +93,7 @@ spec:
           protocol: TCP
         - port: 8081
           protocol: TCP
+        {{- if .Values.webhook.enabled }}
         - port: 9443
           protocol: TCP
+        {{- end }}

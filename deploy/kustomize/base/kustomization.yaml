@@ -1,0 +1,12 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Kustomize manages the cluster add-on layer: PriorityClasses, the device
+# plugin DaemonSet, and the scheduler extender — infrastructure that has to
+# exist regardless of which tool deploys the app tier (apiserver/operator/
+# Postgres/NATS), which is the Helm chart's job (deploy/helm). Duplicating
+# the app tier here too would just be two copies of the same YAML to keep in
+# sync for no reason — see deploy/kustomize/README.md.
+resources:
+  - priorityclasses.yaml
+  - devplugin-daemonset.yaml
+  - scheduler.yaml

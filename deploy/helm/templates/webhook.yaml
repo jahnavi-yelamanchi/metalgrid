@@ -1,0 +1,62 @@
+{{- if .Values.webhook.enabled }}
+# Requires cert-manager (https://cert-manager.io) already installed in the
+# cluster — it's what actually issues the cert and injects caBundle below,
+# this chart only declares the Issuer/Certificate requesting one.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: metalgrid-selfsigned
+  namespace: {{ .Release.Namespace }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: metalgrid-webhook-cert
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: metalgrid-webhook-certs
+  dnsNames:
+    - metalgrid-operator-webhook.{{ .Release.Namespace }}.svc
+    - metalgrid-operator-webhook.{{ .Release.Namespace }}.svc.cluster.local
+  issuerRef:
+    name: metalgrid-selfsigned
+    kind: Issuer
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: metalgrid-operator-webhook
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app: metalgrid-operator
+  ports:
+    - port: 443
+      targetPort: 9443
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: metalgrid-validating-webhook
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/metalgrid-webhook-cert
+webhooks:
+  - name: vacceleratorjob.metalgrid.dev
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Fail
+    clientConfig:
+      service:
+        name: metalgrid-operator-webhook
+        namespace: {{ .Release.Namespace }}
+        path: /validate-metalgrid-dev-v1alpha1-acceleratorjob
+        port: 443
+    rules:
+      - apiGroups: ["metalgrid.dev"]
+        apiVersions: ["v1alpha1"]
+        resources: ["acceleratorjobs"]
+        operations: ["CREATE"]
+        scope: Namespaced
+{{- end }}

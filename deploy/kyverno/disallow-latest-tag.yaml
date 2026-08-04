@@ -1,0 +1,43 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-latest-tag
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: require-image-tag
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              # Scoped to where MetalGrid's own workloads run — enforcing
+              # cluster-wide would also gate kube-system/cert-manager/Kyverno
+              # itself, which isn't this policy's job.
+              namespaces: ["default", "metalgrid-system"]
+      validate:
+        message: "An explicit image tag is required (a bare image name defaults to :latest)."
+        foreach:
+          - list: "request.object.spec.containers"
+            deny:
+              conditions:
+                all:
+                  - key: "{{ contains(element.image, ':') }}"
+                    operator: Equals
+                    value: false
+    - name: disallow-latest-tag
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: ["default", "metalgrid-system"]
+      validate:
+        message: "Using the ':latest' tag is not allowed; pin to a specific version."
+        foreach:
+          - list: "request.object.spec.containers"
+            deny:
+              conditions:
+                all:
+                  - key: "{{ ends_with(element.image, ':latest') }}"
+                    operator: Equals
+                    value: true

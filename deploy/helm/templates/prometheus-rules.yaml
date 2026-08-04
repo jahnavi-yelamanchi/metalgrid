@@ -1,8 +1,14 @@
+{{- if .Values.monitoring.enabled }}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
   name: metalgrid-rules
+  namespace: {{ .Release.Namespace }}
   labels:
+    # kube-prometheus-stack's Prometheus Operator only picks up
+    # PrometheusRules matching its ruleSelector — "release: <helm release
+    # name of the stack>" is its default. Override via --set if your
+    # kube-prometheus-stack install used a different release name.
     release: kube-prometheus-stack
 spec:
   groups:
@@ -39,7 +45,7 @@ spec:
             severity: warning
           annotations:
             summary: "MetalGrid API p99 latency above 500ms SLO"
-            description: "p99 latency for job create/get has been {{ $value | humanizeDuration }} for 10m."
+            description: "p99 latency for job create/get has been {{ "{{ $value | humanizeDuration }}" }} for 10m."
 
         - alert: MetalGridJobSuccessRatioLow
           expr: metalgrid:job_success_ratio < 0.99
@@ -48,7 +54,7 @@ spec:
             severity: warning
           annotations:
             summary: "MetalGrid job success ratio below 99% SLO"
-            description: "Current success ratio is {{ $value | humanizePercentage }}."
+            description: "Current success ratio is {{ "{{ $value | humanizePercentage }}" }}."
 
         - alert: MetalGridQueueBacklogGrowing
           expr: metalgrid_queue_depth > 1000
@@ -57,7 +63,7 @@ spec:
             severity: warning
           annotations:
             summary: "MetalGrid submit queue backlog over 1000"
-            description: "{{ $value }} submissions pending — operator may be down or overwhelmed."
+            description: "{{ "{{ $value }}" }} submissions pending — operator may be down or overwhelmed."
 
         - alert: MetalGridReconcileErrors
           expr: sum(rate(controller_runtime_reconcile_errors_total{controller=~"acceleratorjob|inferenceservice"}[5m])) > 0
@@ -66,4 +72,5 @@ spec:
             severity: critical
           annotations:
             summary: "MetalGrid operator reconcile errors"
-            description: "Reconcile error rate is {{ $value | humanize }}/s."
+            description: "Reconcile error rate is {{ "{{ $value | humanize }}" }}/s."
+{{- end }}

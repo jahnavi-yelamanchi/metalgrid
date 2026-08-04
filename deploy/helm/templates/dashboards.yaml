@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: metalgrid-dashboards
+  namespace: {{ .Release.Namespace }}
+  labels:
+    # kube-prometheus-stack's Grafana sidecar watches for this label and
+    # auto-imports any ConfigMap carrying it — no manual dashboard upload.
+    grafana_dashboard: "1"
+data:
+  metalgrid-overview.json: |
+{{ .Files.Get "dashboards/metalgrid-overview.json" | indent 4 }}
