@@ -23,6 +23,7 @@ spec:
             - containerPort: 5432
           volumeMounts:
             - { name: data, mountPath: /var/lib/postgresql/data }
+          resources: {{ toYaml .Values.resources.datastore | nindent 12 }}
           readinessProbe:
             exec:
               command: ["pg_isready", "-U", {{ .Values.postgres.user | quote }}]

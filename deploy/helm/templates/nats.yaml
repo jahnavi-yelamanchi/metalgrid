@@ -21,6 +21,7 @@ spec:
             - { containerPort: 8222, name: monitor }
           volumeMounts:
             - { name: data, mountPath: /data }
+          resources: {{ toYaml .Values.resources.datastore | nindent 12 }}
           readinessProbe:
             httpGet: { path: /healthz, port: monitor }
             periodSeconds: 5
