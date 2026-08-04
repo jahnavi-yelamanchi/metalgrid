@@ -75,7 +75,11 @@ jobs:
           labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
 
       - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@0.29.0
+        # Pinned by commit SHA, not a tag: this action had a real supply-chain
+        # compromise in March 2026 (75/76 tags force-pushed to malicious
+        # commits) — a tag pin, even a specific version, is exactly what got
+        # hijacked. SHA = v0.36.0.
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
         with:
           image-ref: ${{ env.IMAGE_BASE }}/${{ matrix.component }}:${{ github.sha }}
           format: table
