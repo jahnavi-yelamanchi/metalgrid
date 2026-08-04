@@ -106,12 +106,31 @@ func (q *Queue) ConsumeFairShare(ctx context.Context, maxDeliver int, keyFunc fu
 
 		for _, msg := range interleaveByKey(msgs, keyFunc) {
 			if err := handler(ctx, msg.Data()); err != nil {
+				if q.deliveriesExhausted(msg, maxDeliver) {
+					if dlqErr := q.PublishDLQ(ctx, msg.Data()); dlqErr != nil {
+						_ = msg.Nak() // couldn't move it to the DLQ; let it redeliver rather than lose it
+						continue
+					}
+					_ = msg.Term()
+					continue
+				}
 				_ = msg.Nak()
 				continue
 			}
 			_ = msg.Ack()
 		}
 	}
+}
+
+// deliveriesExhausted reports whether this delivery attempt is the last one
+// the consumer's MaxDeliver will allow, so the caller should route to the
+// DLQ instead of Nak-ing for another redelivery.
+func (q *Queue) deliveriesExhausted(msg jetstream.Msg, maxDeliver int) bool {
+	meta, err := msg.Metadata()
+	if err != nil {
+		return false
+	}
+	return int(meta.NumDelivered) >= maxDeliver
 }
 
 // interleaveByKey groups msgs by keyFunc while preserving each group's
@@ -154,4 +173,29 @@ func interleaveByKey(msgs []jetstream.Msg, keyFunc func([]byte) string) []jetstr
 func (q *Queue) PublishDLQ(ctx context.Context, payload []byte) error {
 	_, err := q.js.Publish(ctx, DLQSubj, payload)
 	return err
+}
+
+// PeekDLQ returns up to limit dead-lettered payloads without consuming them
+// (AckPolicy none, ephemeral consumer), so GET /v1/jobs/dlq can inspect the
+// queue without needing a separate store of dead-letter history.
+func (q *Queue) PeekDLQ(ctx context.Context, limit int) ([][]byte, error) {
+	cons, err := q.js.CreateConsumer(ctx, StreamName, jetstream.ConsumerConfig{
+		AckPolicy:     jetstream.AckNonePolicy,
+		FilterSubject: DLQSubj,
+		DeliverPolicy: jetstream.DeliverAllPolicy,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("creating peek consumer: %w", err)
+	}
+
+	batch, err := cons.Fetch(limit, jetstream.FetchMaxWait(2*time.Second))
+	if err != nil {
+		return nil, fmt.Errorf("fetching DLQ messages: %w", err)
+	}
+
+	var out [][]byte
+	for msg := range batch.Messages() {
+		out = append(out, msg.Data())
+	}
+	return out, nil
 }

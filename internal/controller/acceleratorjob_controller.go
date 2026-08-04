@@ -33,6 +33,7 @@ type AcceleratorJobReconciler struct {
 // +kubebuilder:rbac:groups=metalgrid.dev,resources=acceleratorjobs/finalizers,verbs=update
 // +kubebuilder:rbac:groups=metalgrid.dev,resources=acceleratorpools,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create
 
 func (r *AcceleratorJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
@@ -56,6 +57,19 @@ func (r *AcceleratorJobReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	if job.Status.Phase == metalgridv1alpha1.AcceleratorJobSucceeded || job.Status.Phase == metalgridv1alpha1.AcceleratorJobFailed {
 		return ctrl.Result{}, nil
+	}
+
+	if job.Status.NextRetryTime != nil {
+		if wait := time.Until(job.Status.NextRetryTime.Time); wait > 0 {
+			return ctrl.Result{RequeueAfter: wait}, nil
+		}
+		return ctrl.Result{}, r.startRetry(ctx, &job)
+	}
+
+	if job.Spec.Checkpoint {
+		if err := r.ensureCheckpointPVC(ctx, &job); err != nil {
+			return ctrl.Result{}, fmt.Errorf("ensuring checkpoint PVC: %w", err)
+		}
 	}
 
 	var pool *metalgridv1alpha1.AcceleratorPool
@@ -95,7 +109,11 @@ func (r *AcceleratorJobReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		if _, ok := existing[name]; ok {
 			continue
 		}
-		newPod := buildPod(&job, pool, name, i, gangSize)
+		checkpointPVC := ""
+		if job.Spec.Checkpoint {
+			checkpointPVC = checkpointPVCName(&job)
+		}
+		newPod := buildPod(&job, pool, name, i, gangSize, checkpointPVC)
 		if err := controllerutil.SetControllerReference(&job, newPod, r.Scheme()); err != nil {
 			return ctrl.Result{}, fmt.Errorf("setting owner reference: %w", err)
 		}
@@ -127,14 +145,9 @@ func (r *AcceleratorJobReconciler) syncStatusFromPods(ctx context.Context, job *
 	}
 
 	phase := aggregatePhase(pods)
-	message := ""
-	if phase == metalgridv1alpha1.AcceleratorJobFailed {
-		for _, p := range pods {
-			if p.Status.Phase == corev1.PodFailed {
-				message = p.Status.Message
-				break
-			}
-		}
+
+	if phase == metalgridv1alpha1.AcceleratorJobFailed && job.Status.Phase != metalgridv1alpha1.AcceleratorJobFailed {
+		return r.scheduleRetryOrFail(ctx, job, failureMessage(pods))
 	}
 
 	if phase == job.Status.Phase {
@@ -142,7 +155,6 @@ func (r *AcceleratorJobReconciler) syncStatusFromPods(ctx context.Context, job *
 	}
 
 	job.Status.Phase = phase
-	job.Status.Message = message
 	if job.Status.PodName == "" {
 		job.Status.PodName = pods[0].Name
 	}
@@ -150,10 +162,77 @@ func (r *AcceleratorJobReconciler) syncStatusFromPods(ctx context.Context, job *
 	if phase == metalgridv1alpha1.AcceleratorJobRunning && job.Status.StartTime == nil {
 		job.Status.StartTime = &now
 	}
-	if (phase == metalgridv1alpha1.AcceleratorJobSucceeded || phase == metalgridv1alpha1.AcceleratorJobFailed) && job.Status.CompletionTime == nil {
+	if phase == metalgridv1alpha1.AcceleratorJobSucceeded && job.Status.CompletionTime == nil {
 		job.Status.CompletionTime = &now
 	}
 	return r.Status().Update(ctx, job)
+}
+
+func failureMessage(pods []corev1.Pod) string {
+	for _, p := range pods {
+		if p.Status.Phase == corev1.PodFailed {
+			return p.Status.Message
+		}
+	}
+	return ""
+}
+
+// backoffDuration is the exponential delay before a job's Nth retry,
+// capped so a job that fails many times doesn't wait forever.
+func backoffDuration(retryCount int32) time.Duration {
+	const base = 5 * time.Second
+	const maxBackoff = 60 * time.Second
+	d := base << retryCount // 5s, 10s, 20s, 40s, ...
+	if d > maxBackoff || d <= 0 { // shift overflow also falls through to the cap
+		return maxBackoff
+	}
+	return d
+}
+
+// scheduleRetryOrFail either schedules a backed-off retry (deferred to
+// startRetry once the backoff elapses, so failed pods stay around for
+// inspection until then) or, once MaxRetries is exhausted, marks the job
+// permanently Failed.
+func (r *AcceleratorJobReconciler) scheduleRetryOrFail(ctx context.Context, job *metalgridv1alpha1.AcceleratorJob, failMsg string) error {
+	now := metav1.Now()
+
+	if job.Status.RetryCount >= job.Spec.MaxRetries {
+		job.Status.Phase = metalgridv1alpha1.AcceleratorJobFailed
+		job.Status.Message = fmt.Sprintf("failed after %d retries: %s", job.Status.RetryCount, failMsg)
+		job.Status.CompletionTime = &now
+		return r.Status().Update(ctx, job)
+	}
+
+	job.Status.RetryCount++
+	job.Status.Phase = metalgridv1alpha1.AcceleratorJobPending
+	wait := backoffDuration(job.Status.RetryCount)
+	retryAt := metav1.NewTime(now.Add(wait))
+	job.Status.NextRetryTime = &retryAt
+	job.Status.Message = fmt.Sprintf("retrying after failure (attempt %d/%d) in %s: %s", job.Status.RetryCount, job.Spec.MaxRetries, wait, failMsg)
+	return r.Status().Update(ctx, job)
+}
+
+// startRetry runs once a scheduled retry's backoff has elapsed: it deletes
+// the failed generation's pods and clears NextRetryTime so the normal
+// pod-creation path (further up Reconcile) recreates them fresh. A
+// checkpoint PVC, if any, is untouched by this delete and still has the
+// prior attempt's data for the job image to resume from.
+func (r *AcceleratorJobReconciler) startRetry(ctx context.Context, job *metalgridv1alpha1.AcceleratorJob) error {
+	job.Status.NextRetryTime = nil
+	if err := r.Status().Update(ctx, job); err != nil {
+		return fmt.Errorf("clearing retry timer: %w", err)
+	}
+
+	var pods corev1.PodList
+	if err := r.List(ctx, &pods, client.InNamespace(job.Namespace), client.MatchingLabels{jobLabel: job.Name}); err != nil {
+		return fmt.Errorf("listing pods to retry: %w", err)
+	}
+	for i := range pods.Items {
+		if err := r.Delete(ctx, &pods.Items[i]); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("deleting failed pod %s: %w", pods.Items[i].Name, err)
+		}
+	}
+	return nil
 }
 
 // aggregatePhase combines gang member pod phases into a single job phase:
@@ -214,7 +293,43 @@ func priorityClassName(priority int32) string {
 	}
 }
 
-func buildPod(job *metalgridv1alpha1.AcceleratorJob, pool *metalgridv1alpha1.AcceleratorPool, name string, index, gangSize int32) *corev1.Pod {
+const checkpointVolumeName = "checkpoint"
+const checkpointMountPath = "/checkpoint"
+
+func checkpointPVCName(job *metalgridv1alpha1.AcceleratorJob) string {
+	return job.Name + "-checkpoint"
+}
+
+// ensureCheckpointPVC creates the job's checkpoint volume once; it's owned
+// by the job (not by any single pod attempt), so it survives pod deletion
+// and recreation across retries and keeps whatever the job image wrote.
+func (r *AcceleratorJobReconciler) ensureCheckpointPVC(ctx context.Context, job *metalgridv1alpha1.AcceleratorJob) error {
+	name := checkpointPVCName(job)
+	var existing corev1.PersistentVolumeClaim
+	err := r.Get(ctx, types.NamespacedName{Namespace: job.Namespace, Name: name}, &existing)
+	if err == nil {
+		return nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return err
+	}
+
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: job.Namespace},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")},
+			},
+		},
+	}
+	if err := controllerutil.SetControllerReference(job, pvc, r.Scheme()); err != nil {
+		return fmt.Errorf("setting owner reference: %w", err)
+	}
+	return r.Create(ctx, pvc)
+}
+
+func buildPod(job *metalgridv1alpha1.AcceleratorJob, pool *metalgridv1alpha1.AcceleratorPool, name string, index, gangSize int32, checkpointPVC string) *corev1.Pod {
 	resources := *job.Spec.Resources.DeepCopy()
 	if resources.Requests == nil {
 		resources.Requests = corev1.ResourceList{}
@@ -225,6 +340,14 @@ func buildPod(job *metalgridv1alpha1.AcceleratorJob, pool *metalgridv1alpha1.Acc
 	qty := resource.MustParse(fmt.Sprintf("%d", job.Spec.AcceleratorCount))
 	resources.Requests[AcceleratorResourceName] = qty
 	resources.Limits[AcceleratorResourceName] = qty
+
+	container := corev1.Container{
+		Name:      "job",
+		Image:     job.Spec.Image,
+		Command:   job.Spec.Command,
+		Args:      job.Spec.Args,
+		Resources: resources,
+	}
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -240,19 +363,23 @@ func buildPod(job *metalgridv1alpha1.AcceleratorJob, pool *metalgridv1alpha1.Acc
 			},
 		},
 		Spec: corev1.PodSpec{
-			RestartPolicy:     corev1.RestartPolicyNever,
-			PriorityClassName: priorityClassName(job.Spec.Priority),
-			Containers: []corev1.Container{
-				{
-					Name:      "job",
-					Image:     job.Spec.Image,
-					Command:   job.Spec.Command,
-					Args:      job.Spec.Args,
-					Resources: resources,
-				},
-			},
+			RestartPolicy:         corev1.RestartPolicyNever,
+			PriorityClassName:     priorityClassName(job.Spec.Priority),
+			ActiveDeadlineSeconds: job.Spec.TimeoutSeconds,
 		},
 	}
+
+	if checkpointPVC != "" {
+		container.Env = append(container.Env, corev1.EnvVar{Name: "METALGRID_CHECKPOINT_DIR", Value: checkpointMountPath})
+		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{Name: checkpointVolumeName, MountPath: checkpointMountPath})
+		pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
+			Name: checkpointVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: checkpointPVC},
+			},
+		})
+	}
+	pod.Spec.Containers = []corev1.Container{container}
 
 	if pool != nil {
 		pod.Spec.NodeSelector = pool.Spec.NodeSelector

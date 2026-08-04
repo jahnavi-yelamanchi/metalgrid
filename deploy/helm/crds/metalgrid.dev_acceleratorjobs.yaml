@@ -66,6 +66,11 @@ spec:
                 items:
                   type: string
                 type: array
+              checkpoint:
+                description: |-
+                  Checkpoint, if true, mounts a PVC at /checkpoint that survives across
+                  retries so the job image can resume instead of restarting from scratch.
+                type: boolean
               command:
                 description: Command overrides the container entrypoint, if set.
                 items:
@@ -82,6 +87,14 @@ spec:
               image:
                 description: Image is the container image to run.
                 type: string
+              maxRetries:
+                default: 3
+                description: |-
+                  MaxRetries is how many times a failed job is retried with backoff
+                  before it's marked permanently Failed. 0 means no retries.
+                format: int32
+                minimum: 0
+                type: integer
               pool:
                 description: |-
                   Pool names the AcceleratorPool this job should be scheduled into. If
@@ -156,6 +169,11 @@ spec:
                 description: Team attributes this job to a tenant for quota/audit
                   purposes.
                 type: string
+              timeoutSeconds:
+                description: TimeoutSeconds kills the job's pods if they run longer
+                  than this.
+                format: int64
+                type: integer
             required:
             - acceleratorCount
             - acceleratorType
@@ -173,6 +191,13 @@ spec:
                 description: Message carries a human-readable explanation for the
                   current phase.
                 type: string
+              nextRetryTime:
+                description: |-
+                  NextRetryTime, if set, is when the controller will delete the failed
+                  generation's pods and create a fresh one. Backoff is enforced by
+                  requeuing until this time passes, not by blocking the reconciler.
+                format: date-time
+                type: string
               phase:
                 description: Phase is the current lifecycle phase.
                 type: string
@@ -180,6 +205,11 @@ spec:
                 description: PodName is the name of the pod running this job, once
                   created.
                 type: string
+              retryCount:
+                description: RetryCount is how many times this job has been retried
+                  after failure.
+                format: int32
+                type: integer
               startTime:
                 description: StartTime is when the job's pod started running.
                 format: date-time

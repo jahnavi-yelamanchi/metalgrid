@@ -1,0 +1,67 @@
+syntax = "proto3";
+
+package metalgrid.v1;
+
+option go_package = "github.com/jahnavi-yelamanchi/metalgrid/internal/grpcapi/pb;pb";
+
+// JobsService mirrors the REST /v1/jobs API. Both transports call the same
+// internal/service.JobService — this is a thin wrapper, not a second
+// implementation of job semantics.
+service JobsService {
+  rpc CreateJob(CreateJobRequest) returns (Job);
+  rpc GetJob(GetJobRequest) returns (Job);
+  rpc ListJobs(ListJobsRequest) returns (ListJobsResponse);
+  rpc DeleteJob(DeleteJobRequest) returns (DeleteJobResponse);
+  rpc GetCapacity(GetCapacityRequest) returns (Capacity);
+}
+
+message CreateJobRequest {
+  string team = 1;
+  string image = 2;
+  repeated string command = 3;
+  repeated string args = 4;
+  string accelerator_type = 5;
+  int32 accelerator_count = 6;
+  int32 priority = 7;
+  string idempotency_key = 8;
+}
+
+message GetJobRequest {
+  string id = 1;
+}
+
+message ListJobsRequest {
+  string team = 1;
+  string cursor = 2;
+  int32 limit = 3;
+}
+
+message ListJobsResponse {
+  repeated Job jobs = 1;
+  string next_cursor = 2;
+}
+
+message DeleteJobRequest {
+  string id = 1;
+}
+
+message DeleteJobResponse {}
+
+message GetCapacityRequest {}
+
+message Job {
+  string id = 1;
+  string team = 2;
+  string image = 3;
+  string accelerator_type = 4;
+  int32 accelerator_count = 5;
+  int32 priority = 6;
+  string status = 7;
+  string message = 8;
+  string created_at = 9; // RFC3339
+}
+
+message Capacity {
+  int64 total = 1;
+  int64 available = 2;
+}

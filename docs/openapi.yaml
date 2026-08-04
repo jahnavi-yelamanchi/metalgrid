@@ -1,0 +1,279 @@
+openapi: 3.0.3
+info:
+  title: MetalGrid Platform API
+  version: 0.1.0
+  description: >
+    REST API for submitting and managing accelerator workloads. A gRPC
+    equivalent (metalgrid.v1.JobsService, see proto/metalgrid/v1/jobs.proto)
+    is served on the same process's GRPC_LISTEN_ADDR — both transports call
+    the same internal/service.JobService, so behavior is identical.
+servers:
+  - url: http://localhost:8080
+
+security:
+  - bearerAuth: []
+
+paths:
+  /v1/jobs:
+    post:
+      summary: Submit an accelerator job
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+          description: Replays of the same key return the original job instead of creating a duplicate.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateJobRequest'
+      responses:
+        '201':
+          description: Job created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '400':
+          description: Invalid request body (missing required fields)
+        '403':
+          description: Token team does not match request team
+        '429':
+          description: Rate limit exceeded for this team
+    get:
+      summary: List jobs (scoped to the authenticated team)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: cursor
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 100
+      responses:
+        '200':
+          description: A page of jobs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobPage'
+
+  /v1/jobs/{id}:
+    get:
+      summary: Get a job by ID
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+      responses:
+        '200':
+          description: Job found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '403':
+          description: Token team does not match the job's team
+        '404':
+          description: Job not found
+    delete:
+      summary: Cancel a job
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+      responses:
+        '204':
+          description: Job cancelled
+        '403':
+          description: Token team does not match the job's team
+        '404':
+          description: Job not found
+
+  /v1/jobs/dlq:
+    get:
+      summary: Inspect the dead-letter queue (submissions that exhausted retries)
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Dead-lettered submissions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobs:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/DLQEntry'
+
+  /v1/capacity:
+    get:
+      summary: Cluster-wide accelerator capacity (public, not tenant-scoped)
+      security: []
+      responses:
+        '200':
+          description: Capacity snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Capacity'
+
+  /v1/audit:
+    get:
+      summary: Audit trail of job create/cancel actions
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: cursor
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 100
+      responses:
+        '200':
+          description: A page of audit entries
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditPage'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        HS256 JWT with a required "team" claim. See hack/gen-token for a
+        local-dev token minter (no OIDC issuer is stood up in this
+        environment). Auth is entirely disabled if the server's JWT_SECRET
+        env var is unset.
+
+  parameters:
+    JobId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+
+  schemas:
+    CreateJobRequest:
+      type: object
+      required: [team, image, acceleratorType, acceleratorCount]
+      properties:
+        team:
+          type: string
+        image:
+          type: string
+        command:
+          type: array
+          items:
+            type: string
+        args:
+          type: array
+          items:
+            type: string
+        acceleratorType:
+          type: string
+        acceleratorCount:
+          type: integer
+        priority:
+          type: integer
+          description: -100..-1 low, 0..99 normal, 100+ high (maps to a native K8s PriorityClass).
+
+    Job:
+      type: object
+      properties:
+        id:
+          type: string
+        team:
+          type: string
+        image:
+          type: string
+        acceleratorType:
+          type: string
+        acceleratorCount:
+          type: integer
+        priority:
+          type: integer
+        status:
+          type: string
+          enum: [Pending, Running, Succeeded, Failed, Cancelled]
+        message:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    JobPage:
+      type: object
+      properties:
+        jobs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Job'
+        nextCursor:
+          type: string
+          description: Present only when there's another page.
+
+    DLQEntry:
+      type: object
+      properties:
+        submission:
+          type: object
+          description: Present when the dead-lettered payload parsed as a valid job submission.
+        raw:
+          type: string
+          description: Present when it didn't — e.g. it dead-lettered because it failed to parse.
+
+    Capacity:
+      type: object
+      properties:
+        total:
+          type: integer
+          format: int64
+        available:
+          type: integer
+          format: int64
+
+    AuditPage:
+      type: object
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditEntry'
+        nextCursor:
+          type: string
+
+    AuditEntry:
+      type: object
+      properties:
+        jobId:
+          type: string
+        team:
+          type: string
+        action:
+          type: string
+          enum: [create, cancel]
+        createdAt:
+          type: string
+          format: date-time

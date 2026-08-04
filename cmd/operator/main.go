@@ -34,6 +34,8 @@ func main() {
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "address for metrics endpoint")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "address for health probe endpoint")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false, "enable leader election for controller manager")
+	var leaderElectionNamespace string
+	flag.StringVar(&leaderElectionNamespace, "leader-election-namespace", envOr("JOB_NAMESPACE", "default"), "namespace to hold the leader election Lease in (no in-cluster pod namespace to infer outside a cluster)")
 	flag.StringVar(&natsURL, "nats-url", envOr("NATS_URL", nats.DefaultURL), "NATS server URL for the job submission queue")
 	flag.StringVar(&namespace, "namespace", envOr("JOB_NAMESPACE", "default"), "namespace to create AcceleratorJob resources in")
 	flag.BoolVar(&enableWebhook, "enable-webhook", false, "serve the AcceleratorJob admission webhook (requires TLS certs in ./k8s-webhook-server/serving-certs; on for in-cluster deployment, off for local dev)")
@@ -45,11 +47,12 @@ func main() {
 	setupLog := ctrl.Log.WithName("setup")
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-		Scheme:                 scheme,
-		Metrics:                metricsserver.Options{BindAddress: metricsAddr},
-		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "metalgrid-operator-leader",
-		HealthProbeBindAddress: probeAddr,
+		Scheme:                  scheme,
+		Metrics:                 metricsserver.Options{BindAddress: metricsAddr},
+		LeaderElection:          enableLeaderElection,
+		LeaderElectionID:        "metalgrid-operator-leader",
+		LeaderElectionNamespace: leaderElectionNamespace,
+		HealthProbeBindAddress:  probeAddr,
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
@@ -58,6 +61,11 @@ func main() {
 
 	if err := (&controller.AcceleratorJobReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "AcceleratorJob")
+		os.Exit(1)
+	}
+
+	if err := (&controller.InferenceServiceReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "InferenceService")
 		os.Exit(1)
 	}
 

@@ -1,0 +1,11 @@
+apiVersion: metalgrid.dev/v1alpha1
+kind: AcceleratorJob
+metadata:
+  name: checkpoint-job
+spec:
+  image: busybox:1.36
+  command: ["sh", "-c", "ls -la $METALGRID_CHECKPOINT_DIR && date >> $METALGRID_CHECKPOINT_DIR/progress && cat $METALGRID_CHECKPOINT_DIR/progress"]
+  acceleratorType: mock-gpu
+  acceleratorCount: 1
+  team: platform
+  checkpoint: true

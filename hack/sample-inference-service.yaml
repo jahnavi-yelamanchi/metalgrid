@@ -1,0 +1,8 @@
+apiVersion: metalgrid.dev/v1alpha1
+kind: InferenceService
+metadata:
+  name: demo-inference
+spec:
+  model: llama-mock-7b
+  team: platform
+  replicas: 1
