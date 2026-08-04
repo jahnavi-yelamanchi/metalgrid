@@ -1,0 +1,192 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: acceleratorjobs.metalgrid.dev
+spec:
+  group: metalgrid.dev
+  names:
+    kind: AcceleratorJob
+    listKind: AcceleratorJobList
+    plural: acceleratorjobs
+    singular: acceleratorjob
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.team
+      name: Team
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: AcceleratorJob is a single accelerator workload submission.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: AcceleratorJobSpec describes a workload requesting accelerator
+              capacity.
+            properties:
+              acceleratorCount:
+                default: 1
+                description: AcceleratorCount is how many accelerator units this job
+                  requests.
+                format: int32
+                minimum: 1
+                type: integer
+              acceleratorType:
+                description: AcceleratorType selects which accelerator kind this job
+                  needs, e.g. "mock-gpu".
+                type: string
+              args:
+                description: Args are passed to the container command.
+                items:
+                  type: string
+                type: array
+              command:
+                description: Command overrides the container entrypoint, if set.
+                items:
+                  type: string
+                type: array
+              gangSize:
+                default: 1
+                description: |-
+                  GangSize is how many identical pods make up this job. Pods in a gang
+                  are scheduled all-or-nothing via the coscheduling plugin. Defaults to 1.
+                format: int32
+                minimum: 1
+                type: integer
+              image:
+                description: Image is the container image to run.
+                type: string
+              pool:
+                description: |-
+                  Pool names the AcceleratorPool this job should be scheduled into. If
+                  unset, the job schedules on any node advertising the accelerator type.
+                type: string
+              priority:
+                default: 0
+                description: Priority is a scheduling priority hint; higher runs first.
+                  Reserved for Phase 2.
+                format: int32
+                type: integer
+              resources:
+                description: Resources sets non-accelerator container resource requests/limits.
+                properties:
+                  claims:
+                    description: |-
+                      Claims lists the names of resources, defined in spec.resourceClaims,
+                      that are used by this container.
+
+                      This field depends on the
+                      DynamicResourceAllocation feature gate.
+
+                      This field is immutable. It can only be set for containers.
+                    items:
+                      description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                      properties:
+                        name:
+                          description: |-
+                            Name must match the name of one entry in pod.spec.resourceClaims of
+                            the Pod where this field is used. It makes that resource available
+                            inside a container.
+                          type: string
+                        request:
+                          description: |-
+                            Request is the name chosen for a request in the referenced claim.
+                            If empty, everything from the claim is made available, otherwise
+                            only the result of this request.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  limits:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Limits describes the maximum amount of compute resources allowed.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                  requests:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Requests describes the minimum amount of compute resources required.
+                      If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                      otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                type: object
+              team:
+                description: Team attributes this job to a tenant for quota/audit
+                  purposes.
+                type: string
+            required:
+            - acceleratorCount
+            - acceleratorType
+            - image
+            - team
+            type: object
+          status:
+            description: AcceleratorJobStatus reflects the observed state of an AcceleratorJob.
+            properties:
+              completionTime:
+                description: CompletionTime is when the job reached Succeeded or Failed.
+                format: date-time
+                type: string
+              message:
+                description: Message carries a human-readable explanation for the
+                  current phase.
+                type: string
+              phase:
+                description: Phase is the current lifecycle phase.
+                type: string
+              podName:
+                description: PodName is the name of the pod running this job, once
+                  created.
+                type: string
+              startTime:
+                description: StartTime is when the job's pod started running.
+                format: date-time
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

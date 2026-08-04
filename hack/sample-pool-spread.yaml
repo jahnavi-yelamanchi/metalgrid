@@ -1,0 +1,7 @@
+apiVersion: metalgrid.dev/v1alpha1
+kind: AcceleratorPool
+metadata:
+  name: pool-spread
+spec:
+  acceleratorType: mock-gpu
+  placementStrategy: Spread

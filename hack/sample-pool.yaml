@@ -1,0 +1,9 @@
+apiVersion: metalgrid.dev/v1alpha1
+kind: AcceleratorPool
+metadata:
+  name: pool-worker
+spec:
+  acceleratorType: mock-gpu
+  nodeSelector:
+    kubernetes.io/hostname: metalgrid-worker
+  placementStrategy: Spread

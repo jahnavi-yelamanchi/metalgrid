@@ -1,0 +1,12 @@
+apiVersion: metalgrid.dev/v1alpha1
+kind: AcceleratorJob
+metadata:
+  name: gang-job
+spec:
+  image: busybox:1.36
+  command: ["sh", "-c", "echo gang member running && sleep 8"]
+  acceleratorType: mock-gpu
+  acceleratorCount: 1
+  gangSize: 3
+  team: platform
+  pool: pool-worker

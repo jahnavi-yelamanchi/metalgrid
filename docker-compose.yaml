@@ -1,0 +1,26 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: metalgrid
+      POSTGRES_PASSWORD: metalgrid
+      POSTGRES_DB: metalgrid
+    ports:
+      - "5432:5432"
+    volumes:
+      - metalgrid-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U metalgrid"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  nats:
+    image: nats:2.10-alpine
+    command: ["-js", "-m", "8222"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+
+volumes:
+  metalgrid-postgres:

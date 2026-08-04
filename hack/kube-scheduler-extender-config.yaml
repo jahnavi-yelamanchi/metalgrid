@@ -1,0 +1,18 @@
+apiVersion: kubescheduler.config.k8s.io/v1
+kind: KubeSchedulerConfiguration
+clientConnection:
+  kubeconfig: /etc/kubernetes/scheduler.conf
+extenders:
+  # ClusterIP, not DNS name: kube-scheduler's static pod runs with
+  # hostNetwork: true and uses the node's resolver, not cluster DNS. Must
+  # match the fixed clusterIP set in deploy/kustomize/base/scheduler.yaml.
+  - urlPrefix: "http://10.96.0.88:8888"
+    filterVerb: "filter"
+    prioritizeVerb: "prioritize"
+    weight: 1
+    enableHTTPS: false
+    nodeCacheCapable: false
+    httpTimeout: 5s
+    managedResources:
+      - name: "metalgrid.dev/accelerator"
+        ignoredByScheduler: false

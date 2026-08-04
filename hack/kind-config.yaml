@@ -1,0 +1,24 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: metalgrid
+nodes:
+  - role: control-plane
+    extraMounts:
+      - hostPath: ./kube-scheduler-extender-config.yaml
+        containerPath: /etc/kubernetes/metalgrid/kube-scheduler-extender-config.yaml
+        readOnly: true
+    kubeadmConfigPatches:
+      - |
+        kind: ClusterConfiguration
+        scheduler:
+          extraArgs:
+            config: /etc/kubernetes/metalgrid/kube-scheduler-extender-config.yaml
+          extraVolumes:
+            - name: metalgrid-scheduler-config
+              hostPath: /etc/kubernetes/metalgrid/kube-scheduler-extender-config.yaml
+              mountPath: /etc/kubernetes/metalgrid/kube-scheduler-extender-config.yaml
+              readOnly: true
+              pathType: File
+  - role: worker
+  - role: worker
+  - role: worker
