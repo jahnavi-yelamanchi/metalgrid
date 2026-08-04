@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -22,13 +23,16 @@ import (
 	"github.com/jahnavi-yelamanchi/metalgrid/internal/api"
 	"github.com/jahnavi-yelamanchi/metalgrid/internal/grpcapi"
 	"github.com/jahnavi-yelamanchi/metalgrid/internal/grpcapi/pb"
+	"github.com/jahnavi-yelamanchi/metalgrid/internal/metrics"
 	"github.com/jahnavi-yelamanchi/metalgrid/internal/queue"
 	"github.com/jahnavi-yelamanchi/metalgrid/internal/service"
 	"github.com/jahnavi-yelamanchi/metalgrid/internal/store"
+	"github.com/jahnavi-yelamanchi/metalgrid/internal/tracing"
 )
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	metrics.RegisterAPI(prometheus.DefaultRegisterer)
 
 	addr := envOr("LISTEN_ADDR", ":8080")
 	grpcAddr := envOr("GRPC_LISTEN_ADDR", ":9090")
@@ -38,9 +42,17 @@ func main() {
 	jwtSecret := os.Getenv("JWT_SECRET") // empty disables auth (local dev)
 	rateLimit, _ := strconv.ParseFloat(envOr("RATE_LIMIT_RPS", "5"), 64)
 	rateBurst, _ := strconv.Atoi(envOr("RATE_LIMIT_BURST", "10"))
+	otlpEndpoint := os.Getenv("OTLP_ENDPOINT") // empty disables tracing (noop tracer)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	shutdownTracing, err := tracing.Init(ctx, "metalgrid-apiserver", otlpEndpoint)
+	if err != nil {
+		logger.Error("initializing tracing", "error", err)
+		os.Exit(1)
+	}
+	defer func() { _ = shutdownTracing(context.Background()) }()
 
 	scheme := clientgoscheme.Scheme
 	utilruntime.Must(metalgridv1alpha1.AddToScheme(scheme))

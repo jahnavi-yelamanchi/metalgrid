@@ -4,12 +4,15 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/jahnavi-yelamanchi/metalgrid/internal/service"
 )
@@ -26,16 +29,19 @@ type Server struct {
 
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /v1/jobs", s.handleCreateJob)
-	mux.HandleFunc("GET /v1/jobs", s.handleListJobs)
-	mux.HandleFunc("GET /v1/jobs/dlq", s.handleListDLQ)
-	mux.HandleFunc("GET /v1/jobs/{id}", s.handleGetJob)
-	mux.HandleFunc("DELETE /v1/jobs/{id}", s.handleDeleteJob)
-	mux.HandleFunc("GET /v1/audit", s.handleListAudit)
+	mux.HandleFunc("POST /v1/jobs", withMetrics("POST /v1/jobs", s.handleCreateJob))
+	mux.HandleFunc("GET /v1/jobs", withMetrics("GET /v1/jobs", s.handleListJobs))
+	mux.HandleFunc("GET /v1/jobs/dlq", withMetrics("GET /v1/jobs/dlq", s.handleListDLQ))
+	mux.HandleFunc("GET /v1/jobs/{id}", withMetrics("GET /v1/jobs/{id}", s.handleGetJob))
+	mux.HandleFunc("DELETE /v1/jobs/{id}", withMetrics("DELETE /v1/jobs/{id}", s.handleDeleteJob))
+	mux.HandleFunc("GET /v1/audit", withMetrics("GET /v1/audit", s.handleListAudit))
 
-	// Capacity is cluster-wide, non-tenant-scoped info; no auth needed.
+	// Capacity, health, and metrics are not tenant-scoped; no auth needed.
 	public := http.NewServeMux()
-	public.HandleFunc("GET /v1/capacity", s.handleCapacity)
+	public.HandleFunc("GET /v1/capacity", withMetrics("GET /v1/capacity", s.handleCapacity))
+	public.HandleFunc("GET /healthz", s.handleHealthz)
+	public.HandleFunc("GET /readyz", s.handleReadyz)
+	public.Handle("GET /metrics", promhttp.Handler())
 
 	var protected http.Handler = mux
 	if len(s.JWTSecret) > 0 {
@@ -47,8 +53,33 @@ func (s *Server) Routes() http.Handler {
 
 	root := http.NewServeMux()
 	root.Handle("/v1/capacity", public)
+	root.Handle("/healthz", public)
+	root.Handle("/readyz", public)
+	root.Handle("/metrics", public)
 	root.Handle("/", protected)
 	return root
+}
+
+func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleReadyz checks the dependencies a request actually needs to succeed:
+// Postgres and NATS. Kubernetes doesn't route traffic to a pod that fails
+// this, so a broken dependency here should mean "take me out of rotation."
+func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+
+	if err := s.Jobs.Store.Ping(ctx); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "postgres not reachable")
+		return
+	}
+	if !s.Jobs.Queue.IsConnected() {
+		writeError(w, http.StatusServiceUnavailable, "nats not connected")
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 type createJobRequest struct {

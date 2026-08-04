@@ -53,6 +53,27 @@ func (q *Queue) Close() {
 	q.nc.Close()
 }
 
+// IsConnected reports live NATS connectivity, for readiness probes.
+func (q *Queue) IsConnected() bool {
+	return q.nc.IsConnected()
+}
+
+// PendingCount returns how many submitted jobs are waiting to be consumed —
+// the durable consumer's NumPending, not the stream's total message count
+// (which would include already-acked messages still in the retention
+// window and so isn't "pending" at all).
+func (q *Queue) PendingCount(ctx context.Context) (int, error) {
+	cons, err := q.js.Consumer(ctx, StreamName, ConsumerName)
+	if err != nil {
+		return 0, fmt.Errorf("getting consumer: %w", err)
+	}
+	info, err := cons.Info(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("getting consumer info: %w", err)
+	}
+	return int(info.NumPending), nil
+}
+
 // Publish sends payload to the submit subject, deduped on msgID.
 func (q *Queue) Publish(ctx context.Context, msgID string, payload []byte) error {
 	_, err := q.js.Publish(ctx, SubmitSubj, payload, jetstream.WithMsgID(msgID))

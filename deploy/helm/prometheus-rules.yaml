@@ -1,0 +1,69 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: metalgrid-rules
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: metalgrid.slo
+      rules:
+        - record: metalgrid:api_availability:ratio_rate30d
+          expr: >
+            sum(rate(metalgrid_api_request_duration_seconds_count{status!~"5.."}[30d]))
+            /
+            sum(rate(metalgrid_api_request_duration_seconds_count[30d]))
+
+        - record: metalgrid:api_latency:p99_5m
+          expr: >
+            histogram_quantile(0.99, sum by (le) (
+              rate(metalgrid_api_request_duration_seconds_bucket{path=~"POST /v1/jobs|GET /v1/jobs/.*"}[5m])
+            ))
+
+        - record: metalgrid:job_scheduling_latency:p95_15m
+          expr: >
+            histogram_quantile(0.95, sum by (le) (
+              rate(metalgrid_job_scheduling_latency_seconds_bucket[15m])
+            ))
+
+        - record: metalgrid:job_success_ratio
+          expr: >
+            sum(metalgrid_jobs_by_phase{phase="Succeeded"}) / sum(metalgrid_jobs_by_phase)
+
+    - name: metalgrid.alerts
+      rules:
+        - alert: MetalGridAPILatencyHigh
+          expr: metalgrid:api_latency:p99_5m > 0.5
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "MetalGrid API p99 latency above 500ms SLO"
+            description: "p99 latency for job create/get has been {{ $value | humanizeDuration }} for 10m."
+
+        - alert: MetalGridJobSuccessRatioLow
+          expr: metalgrid:job_success_ratio < 0.99
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "MetalGrid job success ratio below 99% SLO"
+            description: "Current success ratio is {{ $value | humanizePercentage }}."
+
+        - alert: MetalGridQueueBacklogGrowing
+          expr: metalgrid_queue_depth > 1000
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "MetalGrid submit queue backlog over 1000"
+            description: "{{ $value }} submissions pending — operator may be down or overwhelmed."
+
+        - alert: MetalGridReconcileErrors
+          expr: sum(rate(controller_runtime_reconcile_errors_total{controller=~"acceleratorjob|inferenceservice"}[5m])) > 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "MetalGrid operator reconcile errors"
+            description: "Reconcile error rate is {{ $value | humanize }}/s."

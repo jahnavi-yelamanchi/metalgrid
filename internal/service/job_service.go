@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -21,12 +22,15 @@ import (
 
 	metalgridv1alpha1 "github.com/jahnavi-yelamanchi/metalgrid/api/v1alpha1"
 	"github.com/jahnavi-yelamanchi/metalgrid/internal/controller"
+	"github.com/jahnavi-yelamanchi/metalgrid/internal/metrics"
 	"github.com/jahnavi-yelamanchi/metalgrid/internal/queue"
 	"github.com/jahnavi-yelamanchi/metalgrid/internal/store"
+	"github.com/jahnavi-yelamanchi/metalgrid/internal/tracing"
 )
 
 var ErrNotFound = store.ErrNotFound
 var ErrValidation = errors.New("validation failed")
+var tracer = otel.Tracer("metalgrid/service")
 
 const DefaultPageLimit = 50
 const MaxPageLimit = 100
@@ -85,6 +89,9 @@ func jobFromRecord(rec store.JobRecord) Job {
 // CreateJob records the job, then enqueues it for the operator to pick up.
 // A repeated IdempotencyKey returns the original job without re-enqueuing.
 func (s *JobService) CreateJob(ctx context.Context, in CreateJobInput) (Job, error) {
+	ctx, span := tracer.Start(ctx, "job.create")
+	defer span.End()
+
 	if err := in.Validate(); err != nil {
 		return Job{}, err
 	}
@@ -120,6 +127,7 @@ func (s *JobService) CreateJob(ctx context.Context, in CreateJobInput) (Job, err
 			AcceleratorType:  rec.AcceleratorType,
 			AcceleratorCount: rec.AcceleratorCount,
 			Priority:         rec.Priority,
+			TraceParent:      tracing.InjectTraceParent(ctx),
 		})
 		if err != nil {
 			return Job{}, fmt.Errorf("encoding job submission: %w", err)
@@ -130,6 +138,7 @@ func (s *JobService) CreateJob(ctx context.Context, in CreateJobInput) (Job, err
 		if err := s.Store.RecordAudit(ctx, rec.ID, rec.Team, "create"); err != nil {
 			s.Logger.Error("recording audit entry", "error", err, "job", rec.ID)
 		}
+		metrics.JobsCreatedTotal.WithLabelValues(rec.Team).Inc()
 	}
 
 	return jobFromRecord(rec), nil

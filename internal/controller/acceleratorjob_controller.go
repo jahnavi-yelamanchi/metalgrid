@@ -16,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	metalgridv1alpha1 "github.com/jahnavi-yelamanchi/metalgrid/api/v1alpha1"
+	"github.com/jahnavi-yelamanchi/metalgrid/internal/metrics"
 )
 
 // AcceleratorResourceName is the extended resource the mock device plugin advertises.
@@ -161,6 +162,7 @@ func (r *AcceleratorJobReconciler) syncStatusFromPods(ctx context.Context, job *
 	now := metav1.Now()
 	if phase == metalgridv1alpha1.AcceleratorJobRunning && job.Status.StartTime == nil {
 		job.Status.StartTime = &now
+		metrics.SchedulingLatencySeconds.Observe(now.Sub(job.CreationTimestamp.Time).Seconds())
 	}
 	if phase == metalgridv1alpha1.AcceleratorJobSucceeded && job.Status.CompletionTime == nil {
 		job.Status.CompletionTime = &now

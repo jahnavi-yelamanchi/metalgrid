@@ -1,0 +1,93 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: metalgrid-operator
+  namespace: metalgrid-system
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: metalgrid-operator
+  template:
+    metadata:
+      labels:
+        app: metalgrid-operator
+    spec:
+      serviceAccountName: metalgrid-operator
+      containers:
+        - name: operator
+          image: metalgrid/operator:dev
+          imagePullPolicy: IfNotPresent
+          args:
+            - --leader-elect=true
+            - --leader-election-namespace=metalgrid-system
+            - --enable-webhook=true
+          ports:
+            - name: metrics
+              containerPort: 8080
+            - name: health
+              containerPort: 8081
+            - name: webhook
+              containerPort: 9443
+          envFrom:
+            - secretRef:
+                name: metalgrid-operator-secrets
+          env:
+            - name: JOB_NAMESPACE
+              value: default
+          startupProbe:
+            httpGet: { path: /healthz, port: health }
+            failureThreshold: 30
+            periodSeconds: 2
+          livenessProbe:
+            httpGet: { path: /healthz, port: health }
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /readyz, port: health }
+            periodSeconds: 5
+            failureThreshold: 2
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+          volumeMounts:
+            - name: webhook-certs
+              mountPath: /tmp/k8s-webhook-server/serving-certs
+              readOnly: true
+      volumes:
+        - name: webhook-certs
+          secret:
+            secretName: metalgrid-webhook-certs
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: metalgrid-operator
+  namespace: metalgrid-system
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: metalgrid-operator
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: metalgrid-operator
+  namespace: metalgrid-system
+spec:
+  podSelector:
+    matchLabels:
+      app: metalgrid-operator
+  policyTypes: [Ingress]
+  ingress:
+    # Metrics (Prometheus) and health probes stay open cluster-wide since
+    # they're low-sensitivity; the webhook port (9443) is where the API
+    # server calls in and can't be scoped by pod label, so it's open too —
+    # TLS + the webhook's own auth is what actually protects that endpoint.
+    - ports:
+        - port: 8080
+          protocol: TCP
+        - port: 8081
+          protocol: TCP
+        - port: 9443
+          protocol: TCP
